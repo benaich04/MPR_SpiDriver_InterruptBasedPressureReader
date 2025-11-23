@@ -1,63 +1,45 @@
 #include <Arduino.h>
-#include <SPI.h>
 #include "HSensor.h"
 
-
-void setup() {
-    // --- Initialize Serial ---
+void setup()
+{
     Serial.begin(115200);
-    delay(200);   // small pause for Serial to come up
+    while (!Serial) {
+        ; // wait for USB serial (on boards like Leonardo/Micro)
+    }
 
-    // --- Configure Chip Select pin ---
-    pinMode(SENSOR_CS_PIN, OUTPUT);
-    digitalWrite(SENSOR_CS_PIN, HIGH);   // deselect sensor
-
-    // --- Initialize SPI ---
-    SPI.begin();   // uses SCK, MOSI, MISO hardware pins
-
-    // Optional: print confirmation
-    Serial.println("SPI + Serial initialized.");
+    Serial.println("EE4144  Exam 2 - Q1: MPRLS0300YG (I2C, Wire library)");
 }
-
 
 void loop()
 {
-    // Call UpdateSensor() once per loop
-    int err = UpdateSensor();
+    int err = UpdateSensor();   // perform one measurement
 
-    // If SPI transaction itself failed 
-    if (err != 0) {
-        Serial.println("NOT VALID: SPI/comm error");
+    if (err != HSENSOR_OK) {
+        Serial.print("NOT VALID: I2C/comm error, code = ");
+        Serial.println(err);
         delay(1000);
         return;
     }
 
-    // Read status flags
     int power = GetPowerStatus();
     int busy  = GetBusy();
     int mem   = GetMemStat();
     int math  = GetMathSat();
 
-    // Check if everything is OK
     if (power == 1 && busy == 0 && mem == 0 && math == 0) {
-        // All good → print pressure in mmHg
-        int P = GetPressureData();
-        Serial.print("Pressure (mmHg): ");
-        Serial.println(P);
+        int pressure_mmHg = GetPressureData();
+        Serial.print("Pressure: ");
+        Serial.print(pressure_mmHg);
+        Serial.println(" mmHg");
     } else {
-        // Something wrong → print NOT VALID and reasons
         Serial.print("NOT VALID: ");
-
-        if (power == 0) Serial.print("PowerOff ");
-        if (busy  == 1) Serial.print("Busy ");
-        if (mem   == 1) Serial.print("MemFail ");
-        if (math  == 1) Serial.print("MathSat ");
-
+        if (power == 0) Serial.print("[Power OFF] ");
+        if (busy  == 1) Serial.print("[Busy] ");
+        if (mem   == 1) Serial.print("[Mem Error] ");
+        if (math  == 1) Serial.print("[Math Sat] ");
         Serial.println();
     }
 
-    // Wait 1 second before next reading
-    delay(1000);
+    delay(1000);   // update once per second
 }
-
-

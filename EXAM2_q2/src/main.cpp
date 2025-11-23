@@ -1,68 +1,78 @@
 #include <Arduino.h>
-#include <SPI.h>
+#include <avr/interrupt.h>
 #include "HSensor.h"
 
-// Global flag set inside ISR when EOC (pad 8) goes HIGH
-volatile bool g_dataReady = false;
-
-// Interrupt Service Routine
-void DataReady() {
-    // Keep ISR extremely short — just set a flag
-    g_dataReady = true;
+// INT0 ISR: called when EOC pin toggles (conversion finished)
+ISR(INT0_vect)
+{
+    DataReady();    // very short: just sets a flag inside HSensor.c
 }
 
-void setup() {
-    // --- Initialize Serial ---
+void setup()
+{
     Serial.begin(115200);
-    delay(200);
-
-    // --- Configure Chip Select pin ---
-    pinMode(SENSOR_CS_PIN, OUTPUT);
-    digitalWrite(SENSOR_CS_PIN, HIGH);  // deselect sensor
-
-    // --- Initialize SPI ---
-    SPI.begin();   // SCK, MOSI, MISO configured automatically
-
-    // --- Configure EOC interrupt pin ---
-    pinMode(INT_PIN, INPUT);   // ! INPUT or INPUT_PULLUP depending on wiring
-
-    // Attach interrupt to rising edge of EOC (pad 8)
-    attachInterrupt(digitalPinToInterrupt(INT_PIN), DataReady, RISING);
-
-    Serial.println("SPI + Serial + Interrupt initialized.");
-}
-
-void loop() {
-    // Only perform a sensor read when the interrupt says data is ready
-    if (g_dataReady) {
-        g_dataReady = false;    // clear flag
-
-        // Call UpdateSensor()
-        int err = UpdateSensor();
-        if (err != 0) {
-            Serial.println("NOT VALID: SPI/comm error");
-            return;
-        }
-
-        // Read status flags
-        int power = GetPowerStatus();
-        int busy  = GetBusy();
-        int mem   = GetMemStat();
-        int math  = GetMathSat();
-
-        // Check if everything is OK
-        if (power == 1 && busy == 0 && mem == 0 && math == 0) {
-            int P = GetPressureData();
-            Serial.print("Pressure (mmHg): ");
-            Serial.println(P);
-        } else {
-            Serial.print("NOT VALID: ");
-            if (power == 0) Serial.print("PowerOff ");
-            if (busy  == 1) Serial.print("Busy ");
-            if (mem   == 1) Serial.print("MemFail ");
-            if (math  == 1) Serial.print("MathSat ");
-            Serial.println();
-        }
+    while (!Serial) {
+        ; // wait for USB serial
     }
 
+    Serial.println("EE4144 : Exam 2 - Q2: MPRLS0300YG (I2C + INT0)");
+
+    // -------- Configure INT0 (PD0) as EOC input --------
+    DDRD &= ~(1 << PD0);   // PD0 = input
+
+    // Optional: enable pull-up if EOC is open-drain
+    // PORTD |= (1 << PD0);
+
+    // Trigger INT0 on rising edge: ISC01 = 1, ISC00 = 1
+    EICRA |= (1 << ISC01) | (1 << ISC00);
+
+    // Enable INT0
+    EIMSK |= (1 << INT0);
+
+    // Global interrupt enable
+    sei();
+}
+
+void loop()
+{
+    // Wait until the interrupt tells us new data is ready
+    if (!IsDataReady()) {
+        // nothing to do yet
+        return;
+    }
+
+    // Clear the flag before processing
+    ClearDataReadyFlag();
+
+    // Now do the I2C transaction and get the new pressure
+    int err = UpdateSensor();
+
+    if (err != HSENSOR_OK) {
+        Serial.print("NOT VALID: I2C/comm error, code = ");
+        Serial.println(err);
+        delay(1000);
+        return;
+    }
+
+    int power = GetPowerStatus();
+    int busy  = GetBusy();
+    int mem   = GetMemStat();
+    int math  = GetMathSat();
+
+    if (power == 1 && busy == 0 && mem == 0 && math == 0) {
+        int pressure_mmHg = GetPressureData();
+        Serial.print("Pressure: ");
+        Serial.print(pressure_mmHg);
+        Serial.println(" mmHg");
+    } else {
+        Serial.print("NOT VALID: ");
+        if (power == 0) Serial.print("[Power OFF] ");
+        if (busy  == 1) Serial.print("[Busy] ");
+        if (mem   == 1) Serial.print("[Mem Error] ");
+        if (math  == 1) Serial.print("[Math Sat] ");
+        Serial.println();
+    }
+
+    // Just to avoid a crazy-fast print loop if EOC fires quickly
+    delay(100);
 }
